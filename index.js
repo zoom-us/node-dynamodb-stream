@@ -10,23 +10,23 @@ module.exports = DynamoDBStream
 
 inherits(DynamoDBStream, EventEmitter)
 function DynamoDBStream(ddbStreams, streamArn) {
-	if ( !(this instanceof DynamoDBStream) ) return new DynamoDBStream(ddbStreams, streamArn)
+    if ( !(this instanceof DynamoDBStream) ) return new DynamoDBStream(ddbStreams, streamArn)
 
-	EventEmitter.call(this)
+    EventEmitter.call(this)
 
-	if (typeof ddbStreams !== 'object') throw new Error('missing DynamoDBStreams instance')
-	if (typeof streamArn !== 'string') throw new Error('missing stream arn, expected string but it was ' + streamArn)
+    if (typeof ddbStreams !== 'object') throw new Error('missing DynamoDBStreams instance')
+    if (typeof streamArn !== 'string') throw new Error('missing stream arn, expected string but it was ' + streamArn)
 
-	this._ddbStreams = ddbStreams
-	this._streamArn = streamArn
-	this._shards = {}
-	this._shardsCount = 0
+    this._ddbStreams = ddbStreams
+    this._streamArn = streamArn
+    this._shards = {}
+    this._shardsCount = 0
 
-	this._emitErrorFunctor = _.bind(this._emitErrorEvent, this)
-	this._fetchStreamShardsFunctor = _.bind(this.fetchStreamShards, this)
-	this._fetchStreamRecordsFunctor = _.bind(this.fetchStreamRecords, this)
+    this._emitErrorFunctor = _.bind(this._emitErrorEvent, this)
+    this._fetchStreamShardsFunctor = _.bind(this.fetchStreamShards, this)
+    this._fetchStreamRecordsFunctor = _.bind(this.fetchStreamRecords, this)
 
-	debug('created stream instance %s', streamArn)
+    debug('created stream instance %s', streamArn)
 }
 
 /**
@@ -34,16 +34,16 @@ function DynamoDBStream(ddbStreams, streamArn) {
  *
  */
 DynamoDBStream.prototype.fetchStreamState = function (callback) {
-	debug('fetchStreamState')
+    debug('fetchStreamState')
 
-	if (callback && typeof callback !== 'function') {
-		throw new Error('invalid argument, can be a callback function or nothing')
-	}
+    if (callback && typeof callback !== 'function') {
+        throw new Error('invalid argument, can be a callback function or nothing')
+    }
 
-	async.series([
-		this._fetchStreamShardsFunctor,
-		this._fetchStreamRecordsFunctor
-	], callback || this._emitErrorFunctor)
+    async.series([
+        this._fetchStreamShardsFunctor,
+        this._fetchStreamRecordsFunctor
+    ], callback || this._emitErrorFunctor)
 }
 
 /**
@@ -51,43 +51,43 @@ DynamoDBStream.prototype.fetchStreamState = function (callback) {
  *
  */
 DynamoDBStream.prototype.fetchStreamRecords = function (callback) {
-	debug('fetchStreamRecords')
+    debug('fetchStreamRecords')
 
-	if (callback && typeof callback !== 'function') {
-		throw new Error('invalid argument, can be a callback function or nothing')
-	}
+    if (callback && typeof callback !== 'function') {
+        throw new Error('invalid argument, can be a callback function or nothing')
+    }
 
-	if (this._shardsCount === 0) {
-		debug('no shards found')
-		return setImmediate(callback)
-	}
+    if (this._shardsCount === 0) {
+        debug('no shards found')
+        return setImmediate(callback)
+    }
 
-	var params = {
-		StreamArn: this._streamArn
-	}
+    var params = {
+        StreamArn: this._streamArn
+    }
 
-	var self = this
+    var self = this
 
-	var work = [
-		_.bind(this._getShardIterators, this),
-		_.bind(this._getRecords, this)
-	]
+    var work = [
+        _.bind(this._getShardIterators, this),
+        _.bind(this._getRecords, this)
+    ]
 
-	async.waterfall(work, function (err, records) {
-		if (err) {
-			return callback ? callback(err) : self._emitErrorEvent(err)
-		}
+    async.waterfall(work, function (err, records) {
+        if (err) {
+            return callback ? callback(err) : self._emitErrorEvent(err)
+        }
 
-		debug(records)
+        debug(records)
 
-		self._trimShards()
+        self._trimShards()
 
-		setImmediate(_.bind(self._emitRecordEvents, self, records))
+        setImmediate(_.bind(self._emitRecordEvents, self, records))
 
-		if (callback) {
-			callback(null, records)
-		}
-	})
+        if (callback) {
+            callback(null, records)
+        }
+    })
 }
 
 /**
@@ -95,188 +95,204 @@ DynamoDBStream.prototype.fetchStreamRecords = function (callback) {
  * this will emit new shards / remove shards events
  */
 DynamoDBStream.prototype.fetchStreamShards = function(callback) {
-	debug('fetchStreamShards')
+    debug('fetchStreamShards')
 
-	if (callback && typeof callback !== 'function') {
-		throw new Error('invalid argument, can be a callback function or nothing')
-	}
+    if (callback && typeof callback !== 'function') {
+        throw new Error('invalid argument, can be a callback function or nothing')
+    }
 
-	this._trimShards()
+    this._trimShards()
 
-	var params = {
-		StreamArn: this._streamArn
-	}
+    var params = {
+        StreamArn: this._streamArn
+    }
 
-	var self = this
+    var self = this
+    var newShardIds = [],objShards={}
+    this._ddbStreams.describeStream(params, _describeStreamCallback)
+    function _describeStreamCallback(err, data) {
+        if (err) {
+            return callback ? callback(err) : self._emitErrorEvent(err)
+        }
 
-	this._ddbStreams.describeStream(params, function(err, data) {
-		if (err) {
-			return callback ? callback(err) : self._emitErrorEvent(err)
-		}
+        debug('describeStream data')
 
-		debug('describeStream data')
+        var shards = data.StreamDescription.Shards
 
-		var shards = data.StreamDescription.Shards
-		var newShardIds = []
+        // collect all the new shards of this stream
+        for (var i = 0; i < shards.length; i++) {
+            var newShardEntry = shards[i]
+            var shardEntry = self._shards[newShardEntry.ShardId]
+            objShards[newShardEntry.ShardId]=true
+            if (!shardEntry && !(newShardEntry.SequenceNumberRange && newShardEntry.SequenceNumberRange.StartingSequenceNumber && newShardEntry.SequenceNumberRange.EndingSequenceNumber && newShardEntry.SequenceNumberRange.StartingSequenceNumber==newShardEntry.SequenceNumberRange.EndingSequenceNumber)) {
+                self._shards[newShardEntry.ShardId] = {
+                    shardId: newShardEntry.ShardId
+                }
+                newShardIds.push(newShardEntry.ShardId)
+            }
+            else if(newShardEntry.SequenceNumberRange && newShardEntry.SequenceNumberRange.StartingSequenceNumber && newShardEntry.SequenceNumberRange.EndingSequenceNumber && newShardEntry.SequenceNumberRange.StartingSequenceNumber==newShardEntry.SequenceNumberRange.EndingSequenceNumber && shardEntry)
+            {
+                delete self._shards[newShardEntry.ShardId]
+            }
+        }
+        if(data.LastEvaluatedShardId)
+        {
+            params.ExclusiveStartShardId=data.LastEvaluatedShardId
+            self._ddbStreams.describeStream(params, _describeStreamCallback)
+            return
+        }
+        for(let shardId in self._shards)
+        {
+            if(!objShards[shardId])
+            {
+                delete self._shards[shardId]
+            }
+        }
+        if (newShardIds.length > 0) {
+            self._shardsCount += newShardIds.length
+            debug('Added %d new shards', newShardIds.length)
+            self._emitNewShardsEvent(newShardIds)
+        }
 
-		// collect all the new shards of this stream
-		for (var i = 0; i < shards.length; i++) {
-			var newShardEntry = shards[i]
-			var shardEntry = self._shards[newShardEntry.ShardId]
-
-			if (!shardEntry) {
-				self._shards[newShardEntry.ShardId] = {
-					shardId: newShardEntry.ShardId
-				}
-				newShardIds.push(newShardEntry.ShardId)
-			}
-		}
-
-		if (newShardIds.length > 0) {
-			self._shardsCount += newShardIds.length
-			debug('Added %d new shards', newShardIds.length)
-			self._emitNewShardsEvent(newShardIds)
-		}
-
-		if (callback) {
-			callback()
-		}
-	})
+        if (callback) {
+            callback()
+        }
+    }
 }
 
 DynamoDBStream.prototype._getShardIterators = function (callback) {
-	debug('_getShardIterators')
+    debug('_getShardIterators')
 
-	async.eachLimit(this._shards, 10, _.bind(this._getShardIterator, this), callback)
+    async.eachLimit(this._shards, 10, _.bind(this._getShardIterator, this), callback)
 }
 
 DynamoDBStream.prototype._getShardIterator = function(shardData, callback) {
-	debug('_getShardIterator')
-	debug(shardData)
+    debug('_getShardIterator')
+    debug(shardData)
 
-	// no need to get an iterator if this shard already has NextShardIterator
-	if (shardData.nextShardIterator) {
-		debug('shard %s already has an iterator, skipping', shardData.shardId)
-		return callback()
-	}
+    // no need to get an iterator if this shard already has NextShardIterator
+    if (shardData.nextShardIterator) {
+        debug('shard %s already has an iterator, skipping', shardData.shardId)
+        return callback()
+    }
 
-	var params = {
-		ShardId: shardData.shardId,
-		ShardIteratorType: 'LATEST',
-		StreamArn: this._streamArn
-	}
+    var params = {
+        ShardId: shardData.shardId,
+        ShardIteratorType: 'LATEST',
+        StreamArn: this._streamArn
+    }
 
-	this._ddbStreams.getShardIterator(params, function (err, result) {
-		if (err) return callback(err)
-		shardData.nextShardIterator = result.ShardIterator
-		callback()
-	})
+    this._ddbStreams.getShardIterator(params, function (err, result) {
+        if (err) return callback(err)
+        shardData.nextShardIterator = result.ShardIterator
+        callback()
+    })
 }
 
 DynamoDBStream.prototype._getRecords = function (callback) {
-	debug('_getRecords')
+    debug('_getRecords')
 
-	var records = []
+    var records = []
 
-	async.eachLimit(this._shards, 10, _.bind(this._getShardRecords, this, records), function (err) {
-		if (err) return callback(err)
-		callback(null, records)
-	})
+    async.eachLimit(this._shards, 10, _.bind(this._getShardRecords, this, records), function (err) {
+        if (err) return callback(err)
+        callback(null, records)
+    })
 }
 
 DynamoDBStream.prototype._getShardRecords = function (records, shardData, callback) {
-	debug('_getShardRecords')
-	var self = this
+    debug('_getShardRecords')
+    var self = this
+    this._ddbStreams.getRecords({ ShardIterator: shardData.nextShardIterator }, function (err, result) {
+        if (err) {
+            if (err.code === 'ExpiredIteratorException') {
+                shardData.nextShardIterator = undefined
+            }
+            return callback(err)
+        }
 
-	this._ddbStreams.getRecords({ ShardIterator: shardData.nextShardIterator }, function (err, result) {
-		if (err) {
-			if (err.code === 'ExpiredIteratorException') {
-				shardData.nextShardIterator = undefined
-			}
-			return callback(err)
-		}
+        if (result.Records) {
+            records.push.apply(records, result.Records)
 
-		if (result.Records) {
-			records.push.apply(records, result.Records)
+            if (result.NextShardIterator) {
+                shardData.nextShardIterator = result.NextShardIterator
+            } else {
+                shardData.nextShardIterator = null
+            }
+        }
 
-			if (result.NextShardIterator) {
-				shardData.nextShardIterator = result.NextShardIterator
-			} else {
-				shardData.nextShardIterator = null
-			}
-		}
-
-		callback()
-	})
+        callback()
+    })
 }
 
 DynamoDBStream.prototype._trimShards = function () {
-	debug('_trimShards')
+    debug('_trimShards')
 
-	var removedShards = []
+    var removedShards = []
 
-	for (var shardId in this._shards) {
-		var shardData = this._shards[shardId]
+    for (var shardId in this._shards) {
+        var shardData = this._shards[shardId]
 
-		if (shardData.nextShardIterator === null) {
-			debug('deleting shard %s', shardId)
-			delete this._shards[shardId]
-			this._shardsCount--
-			removedShards.push(shardId)
-		}
-	}
+        if (shardData.nextShardIterator === null) {
+            debug('deleting shard %s', shardId)
+            delete this._shards[shardId]
+            this._shardsCount--
+            removedShards.push(shardId)
+        }
+    }
 
-	if (removedShards.length > 0) {
-		this._emitRemoveShardsEvent(removedShards)
-	}
+    if (removedShards.length > 0) {
+        this._emitRemoveShardsEvent(removedShards)
+    }
 }
 
 DynamoDBStream.prototype._emitRecordEvents = function (events) {
-	debug('_emitRecordEvents')
+    debug('_emitRecordEvents')
 
-	for (var i = 0; i < events.length; i++) {
-		var event = events[i]
-		var newRecord = event.dynamodb.NewImage ? DynamoDBValue.toJavascript(event.dynamodb.NewImage) : null
-		var oldRecord = event.dynamodb.OldImage ? DynamoDBValue.toJavascript(event.dynamodb.OldImage) : null
+    for (var i = 0; i < events.length; i++) {
+        var event = events[i]
+        var newRecord = event.dynamodb.NewImage ? DynamoDBValue.toJavascript(event.dynamodb.NewImage) : null
+        var oldRecord = event.dynamodb.OldImage ? DynamoDBValue.toJavascript(event.dynamodb.OldImage) : null
+        var keys = event.dynamodb.Keys ? DynamoDBValue.toJavascript(event.dynamodb.Keys) : null
 
-		switch (event.eventName) {
-			case 'INSERT':
-				this.emit('insert record', newRecord)
-				break
+        switch (event.eventName) {
+            case 'INSERT':
+                this.emit('insert record', newRecord, keys)
+                break
 
-			case 'MODIFY':
-				var newRecord = newRecord
-				var oldRecord = oldRecord
-				this.emit('modify record', newRecord, oldRecord)
-				break
+            case 'MODIFY':
+                var newRecord = newRecord
+                var oldRecord = oldRecord
+                this.emit('modify record', newRecord, oldRecord, keys)
+                break
 
-			case 'REMOVE':
-				this.emit('remove record', oldRecord)
-				break
+            case 'REMOVE':
+                this.emit('remove record', oldRecord, keys)
+                break
 
-			default:
-				 this._emitErrorEvent(new Error('unknown dynamodb event ' + event.eventName))
-		}
-	}
+            default:
+                this._emitErrorEvent(new Error('unknown dynamodb event ' + event.eventName))
+        }
+    }
 }
 
 DynamoDBStream.prototype._emitErrorEvent = function (err) {
-	this.emit('error', err)
+    this.emit('error', err)
 }
 
 DynamoDBStream.prototype._emitNewShardsEvent = function (shardIds) {
-	setImmediate(_.bind(this.emit, this, 'new shards', shardIds))
+    setImmediate(_.bind(this.emit, this, 'new shards', shardIds))
 }
 
 DynamoDBStream.prototype._emitRemoveShardsEvent = function (shardIds) {
-	setImmediate(_.bind(this.emit, this, 'remove shards', shardIds))
+    setImmediate(_.bind(this.emit, this, 'remove shards', shardIds))
 }
 
 DynamoDBStream.prototype.getShardState = function () {
-	return _.cloneDeep(this._shards)
+    return _.cloneDeep(this._shards)
 }
 
 DynamoDBStream.prototype.setShardState = function (shards) {
-	this._shardsCount = Object.keys(shards).length
-	this._shards = shards
+    this._shardsCount = Object.keys(shards).length
+    this._shards = shards
 }
