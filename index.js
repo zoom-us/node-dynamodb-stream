@@ -112,6 +112,7 @@ DynamoDBStream.prototype.fetchStreamShards = function(callback) {
     this._ddbStreams.describeStream(params, _describeStreamCallback)
     function _describeStreamCallback(err, data) {
         if (err) {
+            console.error('describe-stream-error',params,err)
             return callback ? callback(err) : self._emitErrorEvent(err)
         }
 
@@ -175,18 +176,28 @@ DynamoDBStream.prototype._getShardIterator = function(shardData, callback) {
         debug('shard %s already has an iterator, skipping', shardData.shardId)
         return callback()
     }
+    if(shardData.shardId)
+    {
+        var params = {
+            ShardId: shardData.shardId,
+            ShardIteratorType: 'LATEST',
+            StreamArn: this._streamArn
+        }
 
-    var params = {
-        ShardId: shardData.shardId,
-        ShardIteratorType: 'LATEST',
-        StreamArn: this._streamArn
+        this._ddbStreams.getShardIterator(params, function (err, result) {
+            if (err)
+            {
+                console.error('get-shard-iterator-error',params,err)
+                return callback(err)
+            }
+            shardData.nextShardIterator = result.ShardIterator
+            callback()
+        })
     }
-
-    this._ddbStreams.getShardIterator(params, function (err, result) {
-        if (err) return callback(err)
-        shardData.nextShardIterator = result.ShardIterator
+    else
+    {
         callback()
-    })
+    }
 }
 
 DynamoDBStream.prototype._getRecords = function (callback) {
@@ -203,26 +214,34 @@ DynamoDBStream.prototype._getRecords = function (callback) {
 DynamoDBStream.prototype._getShardRecords = function (records, shardData, callback) {
     debug('_getShardRecords')
     var self = this
-    this._ddbStreams.getRecords({ ShardIterator: shardData.nextShardIterator }, function (err, result) {
-        if (err) {
-            if (err.code === 'ExpiredIteratorException') {
-                shardData.nextShardIterator = undefined
+    if(shardData.nextShardIterator)
+    {
+        this._ddbStreams.getRecords({ ShardIterator: shardData.nextShardIterator }, function (err, result) {
+            if (err) {
+                console.error('get-records-error',shardData.nextShardIterator,err)
+                if (err.code === 'ExpiredIteratorException') {
+                    shardData.nextShardIterator = undefined
+                }
+                return callback(err)
             }
-            return callback(err)
-        }
 
-        if (result.Records) {
-            records.push.apply(records, result.Records)
+            if (result.Records) {
+                records.push.apply(records, result.Records)
 
-            if (result.NextShardIterator) {
-                shardData.nextShardIterator = result.NextShardIterator
-            } else {
-                shardData.nextShardIterator = null
+                if (result.NextShardIterator) {
+                    shardData.nextShardIterator = result.NextShardIterator
+                } else {
+                    shardData.nextShardIterator = null
+                }
             }
-        }
 
+            callback()
+        })
+    }
+    else
+    {
         callback()
-    })
+    }
 }
 
 DynamoDBStream.prototype._trimShards = function () {
